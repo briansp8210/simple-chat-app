@@ -1,0 +1,27 @@
+version: '3'
+
+services:
+  db:
+    image: postgres:13
+    container_name: postgres
+    environment:
+      - POSTGRES_HOST_AUTH_METHOD=trust
+    ports:
+      - 127.0.0.1:5432:5432
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - db_data:/var/lib/postgresql/data
+
+  chat:
+    image: golang:1.14.4-stretch
+    container_name: chat-server
+    command: bash -c 'cd /simple-chat-app/cmd/server && go run main.go'
+    depends_on:
+      - db
+    ports:
+      - 127.0.0.1:61234:61234
+    volumes:
+      - .:/simple-chat-app
+
+volumes:
+  db_data:

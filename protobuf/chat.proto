@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package protobuf;
+
+service Chat {
+  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+}
+
+message RegisterRequest {
+  string username = 1;
+  bytes password_hash = 2;
+}
+
+message RegisterResponse {}
