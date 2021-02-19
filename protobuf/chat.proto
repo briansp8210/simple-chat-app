@@ -3,7 +3,9 @@ syntax = "proto3";
 package protobuf;
 
 service Chat {
-  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+  rpc Register(RegisterRequest) returns (Empty) {}
+  rpc Login(LoginRequest) returns (Empty) {}
+  rpc Logout(LogoutRequest) returns (Empty) {}
 }
 
 message RegisterRequest {
@@ -11,4 +13,11 @@ message RegisterRequest {
   bytes password_hash = 2;
 }
 
-message RegisterResponse {}
+message LoginRequest {
+  string username = 1;
+  bytes password_hash = 2;
+}
+
+message LogoutRequest { string username = 1; }
+
+message Empty {}

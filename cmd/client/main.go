@@ -36,4 +36,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	_, err = c.Login(context.Background(), &pb.LoginRequest{
+		Username:     "user1",
+		PasswordHash: hash[:],
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("user1 login successfully")
+
+	_, err = c.Logout(context.Background(), &pb.LogoutRequest{
+		Username: "user1",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("user1 logout successfully")
 }
