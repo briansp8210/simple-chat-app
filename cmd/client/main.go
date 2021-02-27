@@ -30,24 +30,24 @@ func main() {
 
 	hash1 := sha3.Sum512([]byte("password1"))
 	_, err = c.Register(context.Background(), &pb.RegisterRequest{
-		Username:     "user1",
-		PasswordHash: hash1[:],
+		Username: "user1",
+		Password: hash1[:],
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	hash2 := sha3.Sum512([]byte("password2"))
 	_, err = c.Register(context.Background(), &pb.RegisterRequest{
-		Username:     "user2",
-		PasswordHash: hash2[:],
+		Username: "user2",
+		Password: hash2[:],
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	_, err = c.Login(context.Background(), &pb.LoginRequest{
-		Username:     "user1",
-		PasswordHash: hash1[:],
+		Username: "user1",
+		Password: hash1[:],
 	})
 	if err != nil {
 		log.Fatal(err)

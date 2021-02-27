@@ -9,29 +9,30 @@ import (
 	"strconv"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
+	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/gomodule/redigo/redis"
 	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*pb.Empty, error) {
+func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*empty.Empty, error) {
 	log.Printf("Receive Registration from user %s\n", in.Username)
 
-	_, err := s.db.Exec("INSERT INTO users (username, password_hash) VALUES ($1, $2)", in.Username, in.PasswordHash)
+	_, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password)
 	if err != nil {
-		return &pb.Empty{}, err
+		return &empty.Empty{}, err
 	}
-	return &pb.Empty{}, nil
+	return &empty.Empty{}, nil
 }
 
 func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginResponse, error) {
 	log.Printf("Receive Login from user %s\n", in.Username)
 
 	var id int32
-	var correctHash []byte
-	err := s.db.QueryRow("SELECT id, password_hash FROM users WHERE username = $1", in.Username).Scan(
-		&id, &correctHash)
+	var correctPassword []byte
+	err := s.db.QueryRow("SELECT id, password FROM users WHERE username = $1", in.Username).Scan(
+		&id, &correctPassword)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, status.Errorf(codes.NotFound, "User %s not found", in.Username)
@@ -39,7 +40,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		log.Fatal(err)
 	}
 
-	if !bytes.Equal(in.PasswordHash, correctHash) {
+	if !bytes.Equal(in.Password, correctPassword) {
 		return nil, status.Error(codes.Unauthenticated, "Invalid password")
 	}
 
@@ -68,7 +69,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 	return &pb.LoginResponse{UserId: id, Conversations: conversations}, nil
 }
 
-func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*pb.Empty, error) {
+func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.Empty, error) {
 	log.Printf("Receive Logout from user %s\n", in.Username)
 
 	count, err := redis.Int(s.redisConn.Do("DEL", fmt.Sprintf("user:%s", in.Username)))
@@ -79,7 +80,7 @@ func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*pb.Empt
 		return nil, status.Errorf(codes.NotFound, "User %s not found", in.Username)
 	}
 
-	return &pb.Empty{}, nil
+	return &empty.Empty{}, nil
 }
 
 func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversationRequest) (*pb.AddConversationResponse, error) {

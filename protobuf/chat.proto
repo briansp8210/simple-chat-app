@@ -1,13 +1,14 @@
 syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
 
 package protobuf;
 
 service Chat {
-  rpc Register(RegisterRequest) returns (Empty) {}
+  rpc Register(RegisterRequest) returns (google.protobuf.Empty) {}
   rpc Login(LoginRequest) returns (LoginResponse) {}
-  rpc Logout(LogoutRequest) returns (Empty) {}
+  rpc Logout(LogoutRequest) returns (google.protobuf.Empty) {}
 
   rpc AddConversation(AddConversationRequest)
       returns (AddConversationResponse) {}
@@ -16,12 +17,12 @@ service Chat {
 
 message RegisterRequest {
   string username = 1;
-  bytes password_hash = 2;
+  bytes password = 2;
 }
 
 message LoginRequest {
   string username = 1;
-  bytes password_hash = 2;
+  bytes password = 2;
 }
 
 message LoginResponse {
@@ -41,8 +42,6 @@ message AddConversationResponse { int32 conversation_id = 1; }
 message GetMessagesRequest { int32 conversation_id = 1; }
 
 message GetMessagesResponse { repeated Message messages = 1; }
-
-message Empty {}
 
 message Conversation {
   int32 id = 1;
