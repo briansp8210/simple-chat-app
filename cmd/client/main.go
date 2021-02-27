@@ -28,10 +28,18 @@ func main() {
 
 	c := pb.NewChatClient(conn)
 
-	hash := sha3.Sum512([]byte("password1"))
+	hash1 := sha3.Sum512([]byte("password1"))
 	_, err = c.Register(context.Background(), &pb.RegisterRequest{
 		Username:     "user1",
-		PasswordHash: hash[:],
+		PasswordHash: hash1[:],
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	hash2 := sha3.Sum512([]byte("password2"))
+	_, err = c.Register(context.Background(), &pb.RegisterRequest{
+		Username:     "user2",
+		PasswordHash: hash2[:],
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -39,12 +47,27 @@ func main() {
 
 	_, err = c.Login(context.Background(), &pb.LoginRequest{
 		Username:     "user1",
-		PasswordHash: hash[:],
+		PasswordHash: hash1[:],
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Println("user1 login successfully")
+
+	rsp, err := c.AddConversation(context.Background(), &pb.AddConversationRequest{
+		MemberNames: []string{"user1", "user2"},
+		Conversation: &pb.Conversation{
+			Name: "user2",
+			Type: "PRIVATE",
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	_, err = c.GetMessages(context.Background(), &pb.GetMessagesRequest{
+		ConversationId: rsp.ConversationId,
+	})
 
 	_, err = c.Logout(context.Background(), &pb.LogoutRequest{
 		Username: "user1",

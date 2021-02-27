@@ -1,11 +1,17 @@
 syntax = "proto3";
 
+import "google/protobuf/timestamp.proto";
+
 package protobuf;
 
 service Chat {
   rpc Register(RegisterRequest) returns (Empty) {}
-  rpc Login(LoginRequest) returns (Empty) {}
+  rpc Login(LoginRequest) returns (LoginResponse) {}
   rpc Logout(LogoutRequest) returns (Empty) {}
+
+  rpc AddConversation(AddConversationRequest)
+      returns (AddConversationResponse) {}
+  rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse) {}
 }
 
 message RegisterRequest {
@@ -18,6 +24,41 @@ message LoginRequest {
   bytes password_hash = 2;
 }
 
+message LoginResponse {
+  int32 user_id = 1;
+  repeated Conversation conversations = 2;
+}
+
 message LogoutRequest { string username = 1; }
 
+message AddConversationRequest {
+  repeated string member_names = 1;
+  Conversation conversation = 2;
+}
+
+message AddConversationResponse { int32 conversation_id = 1; }
+
+message GetMessagesRequest { int32 conversation_id = 1; }
+
+message GetMessagesResponse { repeated Message messages = 1; }
+
 message Empty {}
+
+message Conversation {
+  int32 id = 1;
+  string name = 2;
+  // Possible types are: PRIVATE
+  string type = 3;
+  repeated int32 member_ids = 4;
+  repeated int32 message_ids = 5;
+}
+
+message Message {
+  int32 id = 1;
+  int32 sender_id = 2;
+  int32 conversation_id = 3;
+  google.protobuf.Timestamp ts = 4;
+  // Possible types are: TEXT
+  string message_data_type = 5;
+  string contents = 6;
+}

@@ -19,4 +19,4 @@ $ cd cmd/client
 $ go run main.go
 ```
 
-Currently the client will connect to server, register a user and perform login, logout for testing purpose. More features and interactive user interface will come soon.
+Currently the client only invokes the implemented services for testing purpose. More features and interactive user interface will come soon.
