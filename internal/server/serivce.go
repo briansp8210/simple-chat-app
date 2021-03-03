@@ -7,13 +7,16 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"time"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
+	"github.com/golang/protobuf/ptypes"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/gomodule/redigo/redis"
 	"github.com/lib/pq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*empty.Empty, error) {
@@ -44,7 +47,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		return nil, status.Error(codes.Unauthenticated, "Invalid password")
 	}
 
-	if _, err := s.redisConn.Do("HSET", fmt.Sprintf("user:%s", in.Username), "id", id, "location", s.instanceID); err != nil {
+	if _, err := s.redisConn.Do("HSET", fmt.Sprintf("user:%d", s.getUserId(in.Username)), "serverId", s.serverId); err != nil {
 		log.Fatal(err)
 	}
 
@@ -70,14 +73,14 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 }
 
 func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.Empty, error) {
-	log.Printf("Receive Logout from user %s\n", in.Username)
+	log.Printf("Logout\n")
 
-	count, err := redis.Int(s.redisConn.Do("DEL", fmt.Sprintf("user:%s", in.Username)))
+	count, err := redis.Int(s.redisConn.Do("DEL", fmt.Sprintf("user:%d", in.UserId)))
 	if err != nil {
 		log.Fatal(err)
 	}
 	if count != 1 {
-		return nil, status.Errorf(codes.NotFound, "User %s not found", in.Username)
+		return nil, status.Errorf(codes.NotFound, "User not found")
 	}
 
 	return &empty.Empty{}, nil
@@ -97,6 +100,10 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 		log.Fatal(err)
 	}
 
+	if _, err := s.redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", id), in.Conversation.MemberIds); err != nil {
+		log.Fatal(err)
+	}
+
 	return &pb.AddConversationResponse{ConversationId: id}, nil
 }
 
@@ -112,7 +119,11 @@ func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest)
 	messages := make([]*pb.Message, 0)
 	for rows.Next() {
 		m := &pb.Message{}
-		if err := rows.Scan(&m.Id, &m.SenderId, &m.ConversationId, &m.Ts, &m.MessageDataType, &m.Contents); err != nil {
+		var t time.Time
+		if err := rows.Scan(&m.Id, &m.SenderId, &m.ConversationId, &t, &m.MessageDataType, &m.Contents); err != nil {
+			log.Fatal(err)
+		}
+		if m.Ts, err = ptypes.TimestampProto(t); err != nil {
 			log.Fatal(err)
 		}
 		messages = append(messages, m)
@@ -124,25 +135,123 @@ func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest)
 	return &pb.GetMessagesResponse{Messages: messages}, nil
 }
 
-func (s *chatServer) getUserId(name string) int32 {
-	idStr, err := redis.String(s.redisConn.Do("HGET", fmt.Sprintf("user:%s", name), "id"))
-	if err != nil && err != redis.ErrNil {
+func (s *chatServer) StreamMessages(in *pb.StreamMessagesRequest, stream pb.Chat_StreamMessagesServer) error {
+	log.Printf("StreamMessages\n")
+
+	msgChan := make(chan *pb.Message)
+	termChan := make(chan interface{})
+	s.AddUserContext(in.UserId, msgChan, termChan)
+
+	for {
+		select {
+		case msg := <-msgChan:
+			if err := stream.Send(msg); err != nil {
+				log.Fatal(err)
+			}
+		case <-termChan:
+			return nil
+		}
+	}
+}
+
+func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest) (*pb.SendMessageResponse, error) {
+	log.Printf("SendMessage\n")
+
+	var id int32
+	var t time.Time
+	err := s.db.QueryRow("INSERT INTO messages (sender_id, conversation_id, data_type, contents) VALUES ($1, $2, $3, $4) RETURNING id, ts",
+		in.Message.SenderId, in.Message.ConversationId, in.Message.MessageDataType, in.Message.Contents).Scan(&id, &t)
+	if err != nil {
 		log.Fatal(err)
 	}
-	if err != redis.ErrNil {
-		id, err := strconv.Atoi(idStr)
+	ts, err := ptypes.TimestampProto(t)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	serverIdToReceiverIds := make(map[string][]int32)
+	memberIds := s.getConversationMemberIds(in.Message.ConversationId)
+	for _, memberId := range memberIds {
+		serverId, err := redis.String(s.redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
 		if err != nil {
 			log.Fatal(err)
 		}
-		return int32(id)
+		serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
+	}
+	for serverId, receiverIds := range serverIdToReceiverIds {
+		msg := pb.MessageWithReceivers{Message: in.Message, ReceiverIds: receiverIds}
+		data, err := proto.Marshal(&msg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if _, err := s.redisConn.Do("PUBLISH", serverId, data); err != nil {
+			log.Fatal(err)
+		}
 	}
 
-	var id int32
-	if err := s.db.QueryRow("SELECT id FROM users WHERE username = $1", name).Scan(&id); err != nil {
+	return &pb.SendMessageResponse{MessageId: id, Ts: ts}, nil
+}
+
+func (s *chatServer) getUserId(name string) (id int32) {
+	idStr, err := redis.String(s.redisConn.Do("GET", fmt.Sprintf("userNameToId:%s", name)))
+	switch err {
+	case nil:
+		idInt, err := strconv.Atoi(idStr)
+		if err != nil {
+			log.Fatal(err)
+		}
+		id = int32(idInt)
+	case redis.ErrNil:
+		if err := s.db.QueryRow("SELECT id FROM users WHERE username = $1", name).Scan(&id); err != nil {
+			log.Fatal(err)
+		}
+		if _, err := s.redisConn.Do("SET", fmt.Sprintf("userNameToId:%s", name), id); err != nil {
+			log.Fatal(err)
+		}
+	default:
 		log.Fatal(err)
 	}
-	if _, err := s.redisConn.Do("HSET", fmt.Sprintf("user:%s", name), "id", id); err != nil {
+	return
+}
+
+func (s *chatServer) getConversationMemberIds(conversationId int32) []int32 {
+	memberIds, err := redis.Ints(s.redisConn.Do("SMEMBERS", fmt.Sprintf("conversation:%d", conversationId)))
+	switch err {
+	case nil:
+	case redis.ErrNil:
+		if err := s.db.QueryRow("SELECT member_ids FROM conversations WHERE id = $1", conversationId).Scan(&memberIds); err != nil {
+			log.Fatal(err)
+		}
+		if _, err := s.redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", conversationId), memberIds); err != nil {
+			log.Fatal(err)
+		}
+	default:
 		log.Fatal(err)
 	}
-	return id
+	var int32MemberIds []int32
+	for _, id := range memberIds {
+		int32MemberIds = append(int32MemberIds, int32(id))
+	}
+	return int32MemberIds
+}
+
+func (s *chatServer) pubHandler() {
+	if err := s.pubSubConn.Subscribe(s.serverId); err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		switch n := s.pubSubConn.Receive().(type) {
+		case error:
+			log.Fatal(n.(error))
+		case redis.Message:
+			var msg pb.MessageWithReceivers
+			if err := proto.Unmarshal(n.Data, &msg); err != nil {
+				log.Fatal(err)
+			}
+			for _, userId := range msg.ReceiverIds {
+				s.users[userId].msgChan <- msg.Message
+			}
+		}
+	}
 }

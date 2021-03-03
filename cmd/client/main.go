@@ -45,7 +45,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, err = c.Login(context.Background(), &pb.LoginRequest{
+	loginrsp1, err := c.Login(context.Background(), &pb.LoginRequest{
 		Username: "user1",
 		Password: hash1[:],
 	})
@@ -54,7 +54,9 @@ func main() {
 	}
 	log.Println("user1 login successfully")
 
-	rsp, err := c.AddConversation(context.Background(), &pb.AddConversationRequest{
+	go c.StreamMessages(context.Background(), &pb.StreamMessagesRequest{UserId: loginrsp1.UserId})
+
+	addconversationrsp1, err := c.AddConversation(context.Background(), &pb.AddConversationRequest{
 		MemberNames: []string{"user1", "user2"},
 		Conversation: &pb.Conversation{
 			Name: "user2",
@@ -65,12 +67,19 @@ func main() {
 		log.Fatal(err)
 	}
 
+	c.SendMessage(context.Background(), &pb.SendMessageRequest{Message: &pb.Message{
+		SenderId:        loginrsp1.UserId,
+		ConversationId:  addconversationrsp1.ConversationId,
+		MessageDataType: "TEXT",
+		Contents:        "Hello! user2",
+	}})
+
 	_, err = c.GetMessages(context.Background(), &pb.GetMessagesRequest{
-		ConversationId: rsp.ConversationId,
+		ConversationId: addconversationrsp1.ConversationId,
 	})
 
 	_, err = c.Logout(context.Background(), &pb.LogoutRequest{
-		Username: "user1",
+		UserId: loginrsp1.UserId,
 	})
 	if err != nil {
 		log.Fatal(err)

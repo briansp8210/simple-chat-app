@@ -13,6 +13,9 @@ service Chat {
   rpc AddConversation(AddConversationRequest)
       returns (AddConversationResponse) {}
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse) {}
+
+  rpc StreamMessages(StreamMessagesRequest) returns (stream Message) {}
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {}
 }
 
 message RegisterRequest {
@@ -30,7 +33,7 @@ message LoginResponse {
   repeated Conversation conversations = 2;
 }
 
-message LogoutRequest { string username = 1; }
+message LogoutRequest { int32 user_id = 1; }
 
 message AddConversationRequest {
   repeated string member_names = 1;
@@ -42,6 +45,15 @@ message AddConversationResponse { int32 conversation_id = 1; }
 message GetMessagesRequest { int32 conversation_id = 1; }
 
 message GetMessagesResponse { repeated Message messages = 1; }
+
+message StreamMessagesRequest { int32 user_id = 1; }
+
+message SendMessageRequest { Message message = 1; }
+
+message SendMessageResponse {
+  int32 message_id = 1;
+  google.protobuf.Timestamp ts = 2;
+}
 
 message Conversation {
   int32 id = 1;
@@ -60,4 +72,9 @@ message Message {
   // Possible types are: TEXT
   string message_data_type = 5;
   string contents = 6;
+}
+
+message MessageWithReceivers {
+  Message message = 1;
+  repeated int32 receiver_ids = 2;
 }

@@ -14,14 +14,23 @@ import (
 type chatServer struct {
 	pb.UnimplementedChatServer
 
-	instanceID string
+	serverId   string
 	grpcServer *grpc.Server
 	db         *sql.DB
 	redisConn  redis.Conn
+	pubSubConn redis.PubSubConn
+
+	users map[int32]*userContext
+}
+
+type userContext struct {
+	msgChan  chan *pb.Message
+	termChan chan interface{}
 }
 
 func NewChatServer() *chatServer {
 	grpcServer := grpc.NewServer()
+
 	db, err := sql.Open("postgres", "user=postgres host=db sslmode=disable")
 	if err != nil {
 		log.Fatal(err)
@@ -31,23 +40,40 @@ func NewChatServer() *chatServer {
 	if err != nil {
 		log.Fatal(err)
 	}
-	id, err := redis.Int(redisConn.Do("INCR", "chatServerInstanceID"))
+
+	serverId, err := redis.Int(redisConn.Do("INCR", "serverId"))
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	c, err := redis.Dial("tcp", "redis:6379")
+	if err != nil {
+		log.Fatal(err)
+	}
+	pubSubConn := redis.PubSubConn{Conn: c}
+
 	server := &chatServer{
-		instanceID: strconv.Itoa(id),
+		serverId:   strconv.Itoa(serverId),
 		grpcServer: grpcServer,
 		db:         db,
 		redisConn:  redisConn,
+		pubSubConn: pubSubConn,
+		users:      make(map[int32]*userContext),
 	}
 	pb.RegisterChatServer(grpcServer, server)
 	return server
 }
 
 func (s *chatServer) Serve(lis *net.Listener) {
+	go s.pubHandler()
 	if err := s.grpcServer.Serve(*lis); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func (s *chatServer) AddUserContext(id int32, msgChan chan *pb.Message, termChan chan interface{}) {
+	s.users[id] = &userContext{
+		msgChan:  msgChan,
+		termChan: termChan,
 	}
 }

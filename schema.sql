@@ -18,7 +18,7 @@ CREATE TABLE messages (
     id serial PRIMARY KEY,
     sender_id integer REFERENCES users NOT NULL,
     conversation_id integer REFERENCES conversations NOT NULL,
-    ts timestamp NOT NULL,
+    ts timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
     data_type message_data_t NOT NULL,
     contents varchar(512) NOT NULL
 );
