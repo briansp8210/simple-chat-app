@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
 	"github.com/gomodule/redigo/redis"
@@ -17,8 +18,8 @@ type chatServer struct {
 	serverId   string
 	grpcServer *grpc.Server
 	db         *sql.DB
-	redisConn  redis.Conn
-	pubSubConn redis.PubSubConn
+	redisPool  *redis.Pool
+	pubSubConn *redis.PubSubConn
 
 	users map[int32]*userContext
 }
@@ -36,28 +37,26 @@ func NewChatServer() *chatServer {
 		log.Fatal(err)
 	}
 
-	redisConn, err := redis.Dial("tcp", "redis:6379")
-	if err != nil {
-		log.Fatal(err)
+	redisPool := &redis.Pool{
+		MaxIdle:     8,
+		IdleTimeout: 240 * time.Second,
+		Dial: func() (redis.Conn, error) {
+			return redis.Dial("tcp", "redis:6379")
+		},
 	}
 
+	redisConn := redisPool.Get()
 	serverId, err := redis.Int(redisConn.Do("INCR", "serverId"))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	c, err := redis.Dial("tcp", "redis:6379")
-	if err != nil {
-		log.Fatal(err)
-	}
-	pubSubConn := redis.PubSubConn{Conn: c}
-
 	server := &chatServer{
 		serverId:   strconv.Itoa(serverId),
 		grpcServer: grpcServer,
 		db:         db,
-		redisConn:  redisConn,
-		pubSubConn: pubSubConn,
+		redisPool:  redisPool,
+		pubSubConn: &redis.PubSubConn{Conn: redisConn},
 		users:      make(map[int32]*userContext),
 	}
 	pb.RegisterChatServer(grpcServer, server)

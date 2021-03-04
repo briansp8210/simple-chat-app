@@ -47,7 +47,9 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		return nil, status.Error(codes.Unauthenticated, "Invalid password")
 	}
 
-	if _, err := s.redisConn.Do("HSET", fmt.Sprintf("user:%d", s.getUserId(in.Username)), "serverId", s.serverId); err != nil {
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	if _, err := redisConn.Do("HSET", fmt.Sprintf("user:%d", s.getUserId(in.Username)), "serverId", s.serverId); err != nil {
 		log.Fatal(err)
 	}
 
@@ -75,7 +77,9 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.Empty, error) {
 	log.Printf("Logout\n")
 
-	count, err := redis.Int(s.redisConn.Do("DEL", fmt.Sprintf("user:%d", in.UserId)))
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	count, err := redis.Int(redisConn.Do("DEL", fmt.Sprintf("user:%d", in.UserId)))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -100,7 +104,9 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 		log.Fatal(err)
 	}
 
-	if _, err := s.redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", id), in.Conversation.MemberIds); err != nil {
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	if _, err := redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", id), in.Conversation.MemberIds); err != nil {
 		log.Fatal(err)
 	}
 
@@ -169,10 +175,12 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 		log.Fatal(err)
 	}
 
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
 	serverIdToReceiverIds := make(map[string][]int32)
 	memberIds := s.getConversationMemberIds(in.Message.ConversationId)
 	for _, memberId := range memberIds {
-		serverId, err := redis.String(s.redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
+		serverId, err := redis.String(redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -184,7 +192,7 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 		if err != nil {
 			log.Fatal(err)
 		}
-		if _, err := s.redisConn.Do("PUBLISH", serverId, data); err != nil {
+		if _, err := redisConn.Do("PUBLISH", serverId, data); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -193,7 +201,9 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 }
 
 func (s *chatServer) getUserId(name string) (id int32) {
-	idStr, err := redis.String(s.redisConn.Do("GET", fmt.Sprintf("userNameToId:%s", name)))
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	idStr, err := redis.String(redisConn.Do("GET", fmt.Sprintf("userNameToId:%s", name)))
 	switch err {
 	case nil:
 		idInt, err := strconv.Atoi(idStr)
@@ -205,7 +215,7 @@ func (s *chatServer) getUserId(name string) (id int32) {
 		if err := s.db.QueryRow("SELECT id FROM users WHERE username = $1", name).Scan(&id); err != nil {
 			log.Fatal(err)
 		}
-		if _, err := s.redisConn.Do("SET", fmt.Sprintf("userNameToId:%s", name), id); err != nil {
+		if _, err := redisConn.Do("SET", fmt.Sprintf("userNameToId:%s", name), id); err != nil {
 			log.Fatal(err)
 		}
 	default:
@@ -215,14 +225,16 @@ func (s *chatServer) getUserId(name string) (id int32) {
 }
 
 func (s *chatServer) getConversationMemberIds(conversationId int32) []int32 {
-	memberIds, err := redis.Ints(s.redisConn.Do("SMEMBERS", fmt.Sprintf("conversation:%d", conversationId)))
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	memberIds, err := redis.Ints(redisConn.Do("SMEMBERS", fmt.Sprintf("conversation:%d", conversationId)))
 	switch err {
 	case nil:
 	case redis.ErrNil:
 		if err := s.db.QueryRow("SELECT member_ids FROM conversations WHERE id = $1", conversationId).Scan(&memberIds); err != nil {
 			log.Fatal(err)
 		}
-		if _, err := s.redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", conversationId), memberIds); err != nil {
+		if _, err := redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", conversationId), memberIds); err != nil {
 			log.Fatal(err)
 		}
 	default:
