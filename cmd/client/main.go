@@ -1,88 +1,16 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"fmt"
-	"log"
 
-	"golang.org/x/crypto/sha3"
-	"google.golang.org/grpc"
-
-	pb "github.com/briansp8210/simple-chat-app/protobuf"
-)
-
-var (
-	host = flag.String("host", "127.0.0.1", "Binding IP address")
-	port = flag.Int("port", 61234, "Binding port number")
+	"github.com/briansp8210/simple-chat-app/internal/client"
 )
 
 func main() {
 	flag.Parse()
+	host := flag.String("host", "127.0.0.1", "Binding IP address")
+	port := flag.Int("port", 61234, "Binding port number")
 
-	conn, err := grpc.Dial(fmt.Sprintf("%s:%d", *host, *port), grpc.WithInsecure())
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	c := pb.NewChatClient(conn)
-
-	hash1 := sha3.Sum512([]byte("password1"))
-	_, err = c.Register(context.Background(), &pb.RegisterRequest{
-		Username: "user1",
-		Password: hash1[:],
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	hash2 := sha3.Sum512([]byte("password2"))
-	_, err = c.Register(context.Background(), &pb.RegisterRequest{
-		Username: "user2",
-		Password: hash2[:],
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	loginrsp1, err := c.Login(context.Background(), &pb.LoginRequest{
-		Username: "user1",
-		Password: hash1[:],
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Println("user1 login successfully")
-
-	go c.StreamMessages(context.Background(), &pb.StreamMessagesRequest{UserId: loginrsp1.UserId})
-
-	addconversationrsp1, err := c.AddConversation(context.Background(), &pb.AddConversationRequest{
-		MemberNames: []string{"user1", "user2"},
-		Conversation: &pb.Conversation{
-			Name: "user2",
-			Type: "PRIVATE",
-		},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	c.SendMessage(context.Background(), &pb.SendMessageRequest{Message: &pb.Message{
-		SenderId:        loginrsp1.UserId,
-		ConversationId:  addconversationrsp1.ConversationId,
-		MessageDataType: "TEXT",
-		Contents:        "Hello! user2",
-	}})
-
-	_, err = c.GetMessages(context.Background(), &pb.GetMessagesRequest{
-		ConversationId: addconversationrsp1.ConversationId,
-	})
-
-	_, err = c.Logout(context.Background(), &pb.LogoutRequest{
-		UserId: loginrsp1.UserId,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Println("user1 logout successfully")
+	client := client.NewChatClient(*host, *port)
+	client.Run()
 }
