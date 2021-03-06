@@ -66,7 +66,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 	conversations := make([]*pb.Conversation, 0)
 	for rows.Next() {
 		c := &pb.Conversation{}
-		if err := rows.Scan(&c.Id, &c.Name, &c.Type, &c.MemberIds, &c.MessageIds); err != nil {
+		if err := rows.Scan(&c.Id, &c.Name, &c.Type, pq.Array(&c.MemberIds)); err != nil {
 			log.Fatal(err)
 		}
 		conversations = append(conversations, c)

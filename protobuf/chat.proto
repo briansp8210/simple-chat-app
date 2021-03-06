@@ -61,7 +61,6 @@ message Conversation {
   // Possible types are: PRIVATE
   string type = 3;
   repeated int32 member_ids = 4;
-  repeated int32 message_ids = 5;
 }
 
 message Message {
