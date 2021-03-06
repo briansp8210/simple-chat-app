@@ -18,5 +18,3 @@ $ docker-compose up -d
 $ cd cmd/client
 $ go run main.go
 ```
-
-Currently the client only invokes the implemented services for testing purpose. More features and interactive user interface will come soon.

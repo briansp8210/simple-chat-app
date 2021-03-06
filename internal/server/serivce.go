@@ -24,7 +24,11 @@ func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*emp
 
 	_, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password)
 	if err != nil {
-		return &empty.Empty{}, err
+		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
+			return nil, status.Errorf(codes.AlreadyExists, "Username %s is already used", in.Username)
+		} else {
+			return nil, err
+		}
 	}
 	return &empty.Empty{}, nil
 }

@@ -10,8 +10,19 @@ import (
 )
 
 type chatClient struct {
-	client *pb.ChatClient
-	app    *tview.Application
+	client pb.ChatClient
+
+	app   *tview.Application
+	pages *tview.Pages
+	modal *tview.Modal
+
+	currentUser *userContext
+}
+
+type userContext struct {
+	id            int32
+	name          string
+	conversations []*pb.Conversation
 }
 
 func NewChatClient(host string, port int) *chatClient {
@@ -20,9 +31,9 @@ func NewChatClient(host string, port int) *chatClient {
 	if err != nil {
 		log.Fatal(err)
 	}
-	pbClient := pb.NewChatClient(conn)
-	client.client = &pbClient
+	client.client = pb.NewChatClient(conn)
 	client.buildFrontEnd()
+	client.currentUser = &userContext{}
 	return client
 }
 
