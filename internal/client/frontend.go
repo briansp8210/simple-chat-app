@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
@@ -72,7 +73,12 @@ func (c *chatClient) buildFrontEnd() {
 		SetLabel("Message: ").
 		SetAcceptanceFunc(tview.InputFieldMaxLength(128)).
 		SetLabelColor(tcell.ColorWhite).
-		SetFieldBackgroundColor(tcell.ColorBlack)
+		SetFieldBackgroundColor(tcell.ColorBlack).
+		SetDoneFunc(func(key tcell.Key) {
+			if key == tcell.KeyEnter {
+				c.sendMessageHandler()
+			}
+		})
 
 	info := tview.NewTextView().
 		SetDynamicColors(true).
@@ -140,11 +146,18 @@ func (c *chatClient) loginHandler(form *tview.Form) {
 			log.Fatal(err)
 		}
 	}
-	c.currentUser = &userContext{id: rsp.UserId}
+	c.currentUser = &userContext{
+		id:               rsp.UserId,
+		conversations:    make([]*conversation, 0, len(rsp.Conversations)),
+		conversationsMap: make(map[int32]*conversation, len(rsp.Conversations)),
+	}
 	for _, convo := range rsp.Conversations {
-		c.currentUser.conversations = append(c.currentUser.conversations, &conversation{Conversation: convo})
+		internalConvo := &conversation{Conversation: convo}
+		c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
+		c.currentUser.conversationsMap[convo.Id] = internalConvo
 		c.conversationList.AddItem(convo.Name, "", 0, c.conversationSelectedHandler)
 	}
+	go c.startStreamingMessages()
 	c.pages.SwitchToPage("page-main")
 }
 
@@ -179,20 +192,67 @@ func (c *chatClient) conversationSelectedHandler() {
 	}
 
 	for _, msg := range conversation.messages {
-		switch msg.SenderId {
-		case c.currentUser.id:
-			fmt.Fprintf(c.chatTextView, "[green]%s[white] ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
-		default:
-			fmt.Fprintf(c.chatTextView, "%s ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
-		}
-
-		switch msg.MessageDataType {
-		case "TEXT":
-			fmt.Fprint(c.chatTextView, msg.Contents)
-		}
-
-		fmt.Fprintf(c.chatTextView, " [gray](%s)[white]\n", msg.Ts.AsTime().Local().Format("2006/01/02 15:04"))
+		c.showMessage(msg)
 	}
+}
+
+func (c *chatClient) sendMessageHandler() {
+	conversation := c.currentUser.conversations[c.conversationList.GetCurrentItem()]
+	msg := &pb.Message{
+		SenderId:        c.currentUser.id,
+		ConversationId:  conversation.Id,
+		MessageDataType: "TEXT",
+		Contents:        c.msgInputField.GetText(),
+	}
+	c.msgInputField.SetText("")
+
+	rsp, err := c.client.SendMessage(context.Background(), &pb.SendMessageRequest{Message: msg})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	msg.Id = rsp.MessageId
+	msg.Ts = rsp.Ts
+	conversation.messages = append(conversation.messages, msg)
+	c.showMessage(msg)
+}
+
+func (c *chatClient) startStreamingMessages() {
+	stream, err := c.client.StreamMessages(context.Background(), &pb.StreamMessagesRequest{UserId: c.currentUser.id})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		msg, err := stream.Recv()
+		switch err {
+		case nil:
+			c.currentUser.conversationsMap[msg.ConversationId].messages = append(c.currentUser.conversationsMap[msg.ConversationId].messages, msg)
+			if c.currentUser.conversations[c.conversationList.GetCurrentItem()].Id == msg.ConversationId {
+				c.showMessage(msg)
+			}
+		case io.EOF:
+			break
+		default:
+			log.Fatal(err)
+		}
+	}
+}
+
+func (c *chatClient) showMessage(msg *pb.Message) {
+	switch msg.SenderId {
+	case c.currentUser.id:
+		fmt.Fprintf(c.chatTextView, "[green]%s[white] ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
+	default:
+		fmt.Fprintf(c.chatTextView, "%s ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
+	}
+
+	switch msg.MessageDataType {
+	case "TEXT":
+		fmt.Fprint(c.chatTextView, msg.Contents)
+	}
+
+	fmt.Fprintf(c.chatTextView, " [gray](%s)[white]\n", msg.Ts.AsTime().Local().Format("2006/01/02 15:04"))
 }
 
 func (c *chatClient) showHoverModal(msg string) {

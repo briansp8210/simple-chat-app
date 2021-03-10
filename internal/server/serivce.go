@@ -185,17 +185,21 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 	if err != nil {
 		log.Fatal(err)
 	}
+	in.Message.Id = id
+	in.Message.Ts = ts
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
 	serverIdToReceiverIds := make(map[string][]int32)
 	memberIds := s.getConversationMemberIds(in.Message.ConversationId)
 	for _, memberId := range memberIds {
-		serverId, err := redis.String(redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
-		if err != nil {
-			log.Fatal(err)
+		if memberId != in.Message.SenderId {
+			serverId, err := redis.String(redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
+			if err != nil {
+				log.Fatal(err)
+			}
+			serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
 		}
-		serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
 	}
 	for serverId, receiverIds := range serverIdToReceiverIds {
 		msg := pb.MessageWithReceivers{Message: in.Message, ReceiverIds: receiverIds}

@@ -24,9 +24,10 @@ type chatClient struct {
 }
 
 type userContext struct {
-	id            int32
-	name          string
-	conversations []*conversation
+	id               int32
+	name             string
+	conversations    []*conversation
+	conversationsMap map[int32]*conversation
 }
 
 type conversation struct {
