@@ -126,7 +126,10 @@ func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest)
 	}
 	defer rows.Close()
 
-	messages := make([]*pb.Message, 0)
+	rsp := &pb.GetMessagesResponse{
+		Messages:       make([]*pb.Message, 0),
+		MemberIdToName: make(map[int32]string),
+	}
 	for rows.Next() {
 		m := &pb.Message{}
 		var t time.Time
@@ -136,13 +139,17 @@ func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest)
 		if m.Ts, err = ptypes.TimestampProto(t); err != nil {
 			log.Fatal(err)
 		}
-		messages = append(messages, m)
+		rsp.Messages = append(rsp.Messages, m)
 	}
 	if err := rows.Err(); err != nil {
 		log.Fatal(err)
 	}
 
-	return &pb.GetMessagesResponse{Messages: messages}, nil
+	for _, id := range s.getConversationMemberIds(in.ConversationId) {
+		rsp.MemberIdToName[id] = s.getUsername(id)
+	}
+
+	return rsp, nil
 }
 
 func (s *chatServer) StreamMessages(in *pb.StreamMessagesRequest, stream pb.Chat_StreamMessagesServer) error {
@@ -228,27 +235,46 @@ func (s *chatServer) getUserId(name string) (id int32) {
 	return
 }
 
-func (s *chatServer) getConversationMemberIds(conversationId int32) []int32 {
+func (s *chatServer) getUsername(id int32) (name string) {
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	memberIds, err := redis.Ints(redisConn.Do("SMEMBERS", fmt.Sprintf("conversation:%d", conversationId)))
+	name, err := redis.String(redisConn.Do("GET", fmt.Sprintf("userIdToName:%d", id)))
 	switch err {
 	case nil:
 	case redis.ErrNil:
-		if err := s.db.QueryRow("SELECT member_ids FROM conversations WHERE id = $1", conversationId).Scan(&memberIds); err != nil {
+		if err := s.db.QueryRow("SELECT username FROM users WHERE id = $1", id).Scan(&name); err != nil {
 			log.Fatal(err)
 		}
-		if _, err := redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", conversationId), memberIds); err != nil {
+		if _, err := redisConn.Do("SET", fmt.Sprintf("userIdToName:%d", id), name); err != nil {
 			log.Fatal(err)
 		}
 	default:
 		log.Fatal(err)
 	}
-	var int32MemberIds []int32
-	for _, id := range memberIds {
-		int32MemberIds = append(int32MemberIds, int32(id))
+	return
+}
+
+func (s *chatServer) getConversationMemberIds(conversationId int32) (int32MemberIds []int32) {
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	memberIds, err := redis.Ints(redisConn.Do("SMEMBERS", fmt.Sprintf("conversationMembers:%d", conversationId)))
+	if err != nil {
+		log.Fatal(err)
 	}
-	return int32MemberIds
+
+	if len(memberIds) == 0 {
+		if err := s.db.QueryRow("SELECT member_ids FROM conversations WHERE id = $1", conversationId).Scan(pq.Array(&int32MemberIds)); err != nil {
+			log.Fatal(err)
+		}
+		if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", conversationId)).AddFlat(int32MemberIds)...); err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		for _, id := range memberIds {
+			int32MemberIds = append(int32MemberIds, int32(id))
+		}
+	}
+	return
 }
 
 func (s *chatServer) pubHandler() {

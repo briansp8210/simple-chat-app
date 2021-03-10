@@ -12,17 +12,26 @@ import (
 type chatClient struct {
 	client pb.ChatClient
 
-	app   *tview.Application
-	pages *tview.Pages
-	modal *tview.Modal
+	app              *tview.Application
+	pages            *tview.Pages
+	modal            *tview.Modal
+	conversationList *tview.List
+	chatTextView     *tview.TextView
+	msgInputField    *tview.InputField
 
-	currentUser *userContext
+	currentUser  *userContext
+	userIdToName map[int32]string
 }
 
 type userContext struct {
 	id            int32
 	name          string
-	conversations []*pb.Conversation
+	conversations []*conversation
+}
+
+type conversation struct {
+	*pb.Conversation
+	messages []*pb.Message
 }
 
 func NewChatClient(host string, port int) *chatClient {
@@ -33,7 +42,7 @@ func NewChatClient(host string, port int) *chatClient {
 	}
 	client.client = pb.NewChatClient(conn)
 	client.buildFrontEnd()
-	client.currentUser = &userContext{}
+	client.userIdToName = make(map[int32]string)
 	return client
 }
 

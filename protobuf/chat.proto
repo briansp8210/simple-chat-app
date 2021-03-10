@@ -44,7 +44,10 @@ message AddConversationResponse { int32 conversation_id = 1; }
 
 message GetMessagesRequest { int32 conversation_id = 1; }
 
-message GetMessagesResponse { repeated Message messages = 1; }
+message GetMessagesResponse {
+  repeated Message messages = 1;
+  map<int32, string> member_id_to_name = 2;
+}
 
 message StreamMessagesRequest { int32 user_id = 1; }
 
