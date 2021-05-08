@@ -12,7 +12,10 @@ service Chat {
 
   rpc AddConversation(AddConversationRequest)
       returns (AddConversationResponse) {}
+  rpc GetConversation(GetConversationRequest)
+      returns (GetConversationResponse) {}
   rpc GetMessages(GetMessagesRequest) returns (GetMessagesResponse) {}
+  rpc GetUsernames(GetUsernamesRequest) returns (GetUsernamesResponse) {}
 
   rpc StreamMessages(StreamMessagesRequest) returns (stream Message) {}
   rpc SendMessage(SendMessageRequest) returns (SendMessageResponse) {}
@@ -42,12 +45,20 @@ message AddConversationRequest {
 
 message AddConversationResponse { int32 conversation_id = 1; }
 
+message GetConversationRequest { int32 conversation_id = 1; }
+
+message GetConversationResponse { Conversation conversation = 1; }
+
 message GetMessagesRequest { int32 conversation_id = 1; }
 
 message GetMessagesResponse {
   repeated Message messages = 1;
   map<int32, string> member_id_to_name = 2;
 }
+
+message GetUsernamesRequest { repeated int32 user_ids = 1; }
+
+message GetUsernamesResponse { map<int32, string> id_to_username = 1; }
 
 message StreamMessagesRequest { int32 user_id = 1; }
 

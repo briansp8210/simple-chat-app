@@ -110,11 +110,23 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	if _, err := redisConn.Do("SADD", fmt.Sprintf("conversationMembers:%d", id), in.Conversation.MemberIds); err != nil {
+	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", id)).AddFlat(in.Conversation.MemberIds)...); err != nil {
 		log.Fatal(err)
 	}
 
 	return &pb.AddConversationResponse{ConversationId: id}, nil
+}
+
+func (s *chatServer) GetConversation(ctx context.Context, in *pb.GetConversationRequest) (*pb.GetConversationResponse, error) {
+	log.Printf("GetConversation\n")
+
+	conversation := &pb.Conversation{}
+	row := s.db.QueryRow("SELECT * FROM conversations WHERE id = $1", in.ConversationId)
+	if err := row.Scan(&conversation.Id, &conversation.Name, &conversation.Type, pq.Array(&conversation.MemberIds)); err != nil {
+		log.Fatal(err)
+	}
+
+	return &pb.GetConversationResponse{Conversation: conversation}, nil
 }
 
 func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
@@ -150,6 +162,17 @@ func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest)
 	}
 
 	return rsp, nil
+}
+
+func (s *chatServer) GetUsernames(ctx context.Context, in *pb.GetUsernamesRequest) (*pb.GetUsernamesResponse, error) {
+	log.Printf("GetUsernames\n")
+
+	idToUsername := make(map[int32]string)
+	for _, uid := range in.UserIds {
+		idToUsername[uid] = s.getUsername(uid)
+	}
+
+	return &pb.GetUsernamesResponse{IdToUsername: idToUsername}, nil
 }
 
 func (s *chatServer) StreamMessages(in *pb.StreamMessagesRequest, stream pb.Chat_StreamMessagesServer) error {
@@ -195,10 +218,13 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 	for _, memberId := range memberIds {
 		if memberId != in.Message.SenderId {
 			serverId, err := redis.String(redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
-			if err != nil {
+			switch err {
+			case redis.ErrNil:
+			case nil:
+				serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
+			default:
 				log.Fatal(err)
 			}
-			serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
 		}
 	}
 	for serverId, receiverIds := range serverIdToReceiverIds {

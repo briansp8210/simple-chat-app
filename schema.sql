@@ -9,7 +9,7 @@ CREATE TYPE message_data_t AS ENUM ('TEXT');
 
 CREATE TABLE conversations (
     id serial PRIMARY KEY,
-    name varchar(32) NOT NULL,
+    name varchar(32) NOT NULL DEFAULT '',
     type conversation_t NOT NULL,
     member_ids integer[] NOT NULL DEFAULT '{}'::integer[]
 );

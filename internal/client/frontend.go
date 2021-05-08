@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
 	"github.com/gdamore/tcell/v2"
@@ -88,6 +89,25 @@ func (c *chatClient) buildFrontEnd() {
 			c.pages.SwitchToPage("page-login")
 		})
 	fmt.Fprintf(info, `F1 ["1"][darkcyan]Logout[white][""] `)
+	fmt.Fprintf(info, `F2 ["2"][darkcyan]Add-conversation[white][""]`)
+
+	var addConversationForm *tview.Form
+	addConversationForm = tview.NewForm().
+		SetButtonsAlign(tview.AlignCenter).
+		SetButtonBackgroundColor(tcell.ColorGray).
+		AddInputField("[white]User/Group Name", "", 0, nil, nil).
+		AddDropDown("Type", []string{"PRIVATE", "GROUP"}, -1, nil).
+		AddButton("OK", func() {
+			c.addConversationHandler(addConversationForm)
+		})
+	addConversationForm.SetBorder(true).SetTitle(" Add Conversation ").SetTitleAlign(tview.AlignCenter)
+	hoverAddConversationForm := tview.NewFlex().
+		AddItem(nil, 0, 2, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(addConversationForm, 10, 1, false).
+			AddItem(nil, 0, 1, false), 0, 1, false).
+		AddItem(nil, 0, 2, false)
 
 	grid := tview.NewGrid().
 		SetRows(0, 1, 1).
@@ -99,11 +119,15 @@ func (c *chatClient) buildFrontEnd() {
 		AddItem(info, 2, 0, 1, 2, 0, 0, true)
 
 	c.pages.AddPage("page-main", grid, true, false)
+	c.pages.AddPage("page-add-conversation-form", hoverAddConversationForm, true, false)
 
 	c.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyF1:
 			c.logoutHandler()
+			return nil
+		case tcell.KeyF2:
+			c.pages.ShowPage("page-add-conversation-form")
 			return nil
 		}
 		return event
@@ -131,13 +155,10 @@ func (c *chatClient) registerHandler(form *tview.Form) {
 }
 
 func (c *chatClient) loginHandler(form *tview.Form) {
+	username := form.GetFormItem(0).(*tview.InputField).GetText()
 	password := sha3.Sum512([]byte(form.GetFormItem(1).(*tview.InputField).GetText()))
-	req := &pb.LoginRequest{
-		Username: form.GetFormItem(0).(*tview.InputField).GetText(),
-		Password: password[:],
-	}
 
-	rsp, err := c.client.Login(context.Background(), req)
+	rsp, err := c.client.Login(context.Background(), &pb.LoginRequest{Username: username, Password: password[:]})
 	if err != nil {
 		if st := status.Convert(err); st.Code() == codes.NotFound || st.Code() == codes.Unauthenticated {
 			c.showHoverModal(st.Message())
@@ -148,6 +169,7 @@ func (c *chatClient) loginHandler(form *tview.Form) {
 	}
 	c.currentUser = &userContext{
 		id:               rsp.UserId,
+		name:             username,
 		conversations:    make([]*conversation, 0, len(rsp.Conversations)),
 		conversationsMap: make(map[int32]*conversation, len(rsp.Conversations)),
 	}
@@ -198,14 +220,18 @@ func (c *chatClient) conversationSelectedHandler() {
 
 func (c *chatClient) sendMessageHandler() {
 	conversation := c.currentUser.conversations[c.conversationList.GetCurrentItem()]
+	contents := strings.TrimSpace(c.msgInputField.GetText())
+	c.msgInputField.SetText("")
+	if len(contents) == 0 {
+		return
+	}
+
 	msg := &pb.Message{
 		SenderId:        c.currentUser.id,
 		ConversationId:  conversation.Id,
 		MessageDataType: "TEXT",
-		Contents:        c.msgInputField.GetText(),
+		Contents:        contents,
 	}
-	c.msgInputField.SetText("")
-
 	rsp, err := c.client.SendMessage(context.Background(), &pb.SendMessageRequest{Message: msg})
 	if err != nil {
 		log.Fatal(err)
@@ -215,6 +241,33 @@ func (c *chatClient) sendMessageHandler() {
 	msg.Ts = rsp.Ts
 	conversation.messages = append(conversation.messages, msg)
 	c.showMessage(msg)
+}
+
+func (c *chatClient) addConversationHandler(form *tview.Form) {
+	_, t := form.GetFormItem(1).(*tview.DropDown).GetCurrentOption()
+	name := form.GetFormItem(0).(*tview.InputField).GetText()
+
+	con := &pb.Conversation{Type: t}
+	req := &pb.AddConversationRequest{Conversation: con}
+	switch t {
+	case "PRIVATE":
+		req.MemberNames = []string{c.currentUser.name, name}
+	case "GROUP":
+		req.MemberNames = []string{c.currentUser.name}
+		req.Conversation.Name = name
+	}
+
+	rsp, err := c.client.AddConversation(context.Background(), req)
+	if err != nil {
+		log.Fatal(err)
+	}
+	con.Id = rsp.ConversationId
+	internalConvo := &conversation{Conversation: con, messages: make([]*pb.Message, 0)}
+	c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
+	c.currentUser.conversationsMap[con.Id] = internalConvo
+	c.conversationList.AddItem(name, "", 0, c.conversationSelectedHandler)
+
+	c.pages.HidePage("page-add-conversation-form")
 }
 
 func (c *chatClient) startStreamingMessages() {
@@ -227,6 +280,16 @@ func (c *chatClient) startStreamingMessages() {
 		msg, err := stream.Recv()
 		switch err {
 		case nil:
+			if _, exist := c.currentUser.conversationsMap[msg.ConversationId]; !exist {
+				rsp, err := c.client.GetConversation(context.Background(), &pb.GetConversationRequest{ConversationId: msg.ConversationId})
+				if err != nil {
+					log.Fatal(err)
+				}
+				internalConvo := &conversation{Conversation: rsp.Conversation}
+				c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
+				c.currentUser.conversationsMap[msg.ConversationId] = internalConvo
+				c.conversationList.AddItem(c.getConversationName(rsp.Conversation), "", 0, c.conversationSelectedHandler)
+			}
 			c.currentUser.conversationsMap[msg.ConversationId].messages = append(c.currentUser.conversationsMap[msg.ConversationId].messages, msg)
 			if c.currentUser.conversations[c.conversationList.GetCurrentItem()].Id == msg.ConversationId {
 				c.showMessage(msg)
@@ -242,9 +305,9 @@ func (c *chatClient) startStreamingMessages() {
 func (c *chatClient) showMessage(msg *pb.Message) {
 	switch msg.SenderId {
 	case c.currentUser.id:
-		fmt.Fprintf(c.chatTextView, "[green]%s[white] ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
+		fmt.Fprintf(c.chatTextView, "[green]%s[white] ", tview.Escape(fmt.Sprintf("[%s]", c.getUsername(msg.SenderId))))
 	default:
-		fmt.Fprintf(c.chatTextView, "%s ", tview.Escape(fmt.Sprintf("[%s]", c.userIdToName[msg.SenderId])))
+		fmt.Fprintf(c.chatTextView, "%s ", tview.Escape(fmt.Sprintf("[%s]", c.getUsername(msg.SenderId))))
 	}
 
 	switch msg.MessageDataType {
@@ -259,4 +322,29 @@ func (c *chatClient) showHoverModal(msg string) {
 	c.modal.SetText(msg)
 	c.pages.ShowPage("page-hover-modal")
 	c.app.SetFocus(c.modal)
+}
+
+func (c *chatClient) getConversationName(conversation *pb.Conversation) (name string) {
+	switch conversation.Type {
+	case "PRIVATE":
+		if conversation.MemberIds[0] == c.currentUser.id {
+			name = c.getUsername(conversation.MemberIds[1])
+		} else {
+			name = c.getUsername(conversation.MemberIds[0])
+		}
+	case "GROUP":
+		name = conversation.Name
+	}
+	return
+}
+
+func (c *chatClient) getUsername(id int32) string {
+	if _, exist := c.userIdToName[id]; !exist {
+		rsp, err := c.client.GetUsernames(context.Background(), &pb.GetUsernamesRequest{UserIds: []int32{id}})
+		if err != nil {
+			log.Fatal(err)
+		}
+		c.userIdToName[id] = rsp.IdToUsername[id]
+	}
+	return c.userIdToName[id]
 }
