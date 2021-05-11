@@ -43,7 +43,7 @@ message AddConversationRequest {
   Conversation conversation = 2;
 }
 
-message AddConversationResponse { int32 conversation_id = 1; }
+message AddConversationResponse { Conversation conversation = 1; }
 
 message GetConversationRequest { int32 conversation_id = 1; }
 

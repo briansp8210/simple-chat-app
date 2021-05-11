@@ -70,9 +70,13 @@ func (s *chatServer) Serve(lis *net.Listener) {
 	}
 }
 
-func (s *chatServer) AddUserContext(id int32, msgChan chan *pb.Message, termChan chan interface{}) {
+func (s *chatServer) CreateUserContext(id int32, msgChan chan *pb.Message, termChan chan interface{}) {
 	s.users[id] = &userContext{
 		msgChan:  msgChan,
 		termChan: termChan,
 	}
+}
+
+func (s *chatServer) DeleteUserContext(id int32) {
+	delete(s.users, id)
 }

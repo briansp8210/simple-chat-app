@@ -22,8 +22,8 @@ import (
 func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*empty.Empty, error) {
 	log.Printf("Receive Registration from user %s\n", in.Username)
 
-	_, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password)
-	if err != nil {
+	if _, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password); err != nil {
+		// Ref.: https://www.postgresql.org/docs/9.2/errcodes-appendix.html
 		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
 			return nil, status.Errorf(codes.AlreadyExists, "Username %s is already used", in.Username)
 		} else {
@@ -36,11 +36,9 @@ func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*emp
 func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginResponse, error) {
 	log.Printf("Receive Login from user %s\n", in.Username)
 
-	var id int32
+	var uid int32
 	var correctPassword []byte
-	err := s.db.QueryRow("SELECT id, password FROM users WHERE username = $1", in.Username).Scan(
-		&id, &correctPassword)
-	if err != nil {
+	if err := s.db.QueryRow("SELECT id, password FROM users WHERE username = $1", in.Username).Scan(&uid, &correctPassword); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, status.Errorf(codes.NotFound, "User %s not found", in.Username)
 		}
@@ -53,11 +51,11 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	if _, err := redisConn.Do("HSET", fmt.Sprintf("user:%d", s.getUserId(in.Username)), "serverId", s.serverId); err != nil {
+	if _, err := redisConn.Do("HSET", fmt.Sprintf("user:%d", uid), "serverId", s.serverId); err != nil {
 		log.Fatal(err)
 	}
 
-	rows, err := s.db.Query("SELECT * FROM conversations WHERE $1 = ANY (member_ids)", id)
+	rows, err := s.db.Query("SELECT * FROM conversations WHERE $1 = ANY (member_ids)", uid)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -75,7 +73,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		log.Fatal(err)
 	}
 
-	return &pb.LoginResponse{UserId: id, Conversations: conversations}, nil
+	return &pb.LoginResponse{UserId: uid, Conversations: conversations}, nil
 }
 
 func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.Empty, error) {
@@ -83,12 +81,9 @@ func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.E
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	count, err := redis.Int(redisConn.Do("DEL", fmt.Sprintf("user:%d", in.UserId)))
+	_, err := redis.Int(redisConn.Do("DEL", fmt.Sprintf("user:%d", in.UserId)))
 	if err != nil {
 		log.Fatal(err)
-	}
-	if count != 1 {
-		return nil, status.Errorf(codes.NotFound, "User not found")
 	}
 
 	return &empty.Empty{}, nil
@@ -98,23 +93,25 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 	log.Printf("AddConversation\n")
 
 	for _, member := range in.MemberNames {
-		in.Conversation.MemberIds = append(in.Conversation.MemberIds, s.getUserId(member))
+		if uid, err := s.getUserId(member); err != nil {
+			return nil, err
+		} else {
+			in.Conversation.MemberIds = append(in.Conversation.MemberIds, uid)
+		}
 	}
 
-	var id int32
-	err := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id",
-		in.Conversation.Name, "PRIVATE", pq.Array(in.Conversation.MemberIds)).Scan(&id)
-	if err != nil {
+	row := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, "PRIVATE", pq.Array(in.Conversation.MemberIds))
+	if err := row.Scan(&in.Conversation.Id); err != nil {
 		log.Fatal(err)
 	}
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", id)).AddFlat(in.Conversation.MemberIds)...); err != nil {
+	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", in.Conversation.Id)).AddFlat(in.Conversation.MemberIds)...); err != nil {
 		log.Fatal(err)
 	}
 
-	return &pb.AddConversationResponse{ConversationId: id}, nil
+	return &pb.AddConversationResponse{Conversation: in.Conversation}, nil
 }
 
 func (s *chatServer) GetConversation(ctx context.Context, in *pb.GetConversationRequest) (*pb.GetConversationResponse, error) {
@@ -180,7 +177,7 @@ func (s *chatServer) StreamMessages(in *pb.StreamMessagesRequest, stream pb.Chat
 
 	msgChan := make(chan *pb.Message)
 	termChan := make(chan interface{})
-	s.AddUserContext(in.UserId, msgChan, termChan)
+	s.CreateUserContext(in.UserId, msgChan, termChan)
 
 	for {
 		select {
@@ -189,6 +186,7 @@ func (s *chatServer) StreamMessages(in *pb.StreamMessagesRequest, stream pb.Chat
 				log.Fatal(err)
 			}
 		case <-termChan:
+			s.DeleteUserContext(in.UserId)
 			return nil
 		}
 	}
@@ -199,9 +197,7 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 
 	var id int32
 	var t time.Time
-	err := s.db.QueryRow("INSERT INTO messages (sender_id, conversation_id, data_type, contents) VALUES ($1, $2, $3, $4) RETURNING id, ts",
-		in.Message.SenderId, in.Message.ConversationId, in.Message.MessageDataType, in.Message.Contents).Scan(&id, &t)
-	if err != nil {
+	if err := s.db.QueryRow("INSERT INTO messages (sender_id, conversation_id, data_type, contents) VALUES ($1, $2, $3, $4) RETURNING id, ts", in.Message.SenderId, in.Message.ConversationId, in.Message.MessageDataType, in.Message.Contents).Scan(&id, &t); err != nil {
 		log.Fatal(err)
 	}
 	ts, err := ptypes.TimestampProto(t)
@@ -214,12 +210,11 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
 	serverIdToReceiverIds := make(map[string][]int32)
-	memberIds := s.getConversationMemberIds(in.Message.ConversationId)
-	for _, memberId := range memberIds {
+	for _, memberId := range s.getConversationMemberIds(in.Message.ConversationId) {
 		if memberId != in.Message.SenderId {
 			serverId, err := redis.String(redisConn.Do("HGET", fmt.Sprintf("user:%d", memberId), "serverId"))
 			switch err {
-			case redis.ErrNil:
+			case redis.ErrNil: // This member is offline, ignore him
 			case nil:
 				serverIdToReceiverIds[serverId] = append(serverIdToReceiverIds[serverId], memberId)
 			default:
@@ -228,8 +223,7 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 		}
 	}
 	for serverId, receiverIds := range serverIdToReceiverIds {
-		msg := pb.MessageWithReceivers{Message: in.Message, ReceiverIds: receiverIds}
-		data, err := proto.Marshal(&msg)
+		data, err := proto.Marshal(&pb.MessageWithReceivers{Message: in.Message, ReceiverIds: receiverIds})
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -241,7 +235,28 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 	return &pb.SendMessageResponse{MessageId: id, Ts: ts}, nil
 }
 
-func (s *chatServer) getUserId(name string) (id int32) {
+func (s *chatServer) pubHandler() {
+	if err := s.pubSubConn.Subscribe(s.serverId); err != nil {
+		log.Fatal(err)
+	}
+
+	for {
+		switch n := s.pubSubConn.Receive().(type) {
+		case error:
+			log.Fatal(n.(error))
+		case redis.Message:
+			var msg pb.MessageWithReceivers
+			if err := proto.Unmarshal(n.Data, &msg); err != nil {
+				log.Fatal(err)
+			}
+			for _, userId := range msg.ReceiverIds {
+				s.users[userId].msgChan <- msg.Message
+			}
+		}
+	}
+}
+
+func (s *chatServer) getUserId(name string) (id int32, err error) {
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
 	idStr, err := redis.String(redisConn.Do("GET", fmt.Sprintf("userNameToId:%s", name)))
@@ -251,18 +266,22 @@ func (s *chatServer) getUserId(name string) (id int32) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		id = int32(idInt)
+		return int32(idInt), nil
 	case redis.ErrNil:
 		if err := s.db.QueryRow("SELECT id FROM users WHERE username = $1", name).Scan(&id); err != nil {
+			if err == sql.ErrNoRows {
+				return -1, status.Errorf(codes.NotFound, "User %s not found", name)
+			}
 			log.Fatal(err)
 		}
 		if _, err := redisConn.Do("SET", fmt.Sprintf("userNameToId:%s", name), id); err != nil {
 			log.Fatal(err)
 		}
+		return id, nil
 	default:
 		log.Fatal(err)
 	}
-	return
+	return // Never reach here
 }
 
 func (s *chatServer) getUsername(id int32) (name string) {
@@ -305,25 +324,4 @@ func (s *chatServer) getConversationMemberIds(conversationId int32) (int32Member
 		}
 	}
 	return
-}
-
-func (s *chatServer) pubHandler() {
-	if err := s.pubSubConn.Subscribe(s.serverId); err != nil {
-		log.Fatal(err)
-	}
-
-	for {
-		switch n := s.pubSubConn.Receive().(type) {
-		case error:
-			log.Fatal(n.(error))
-		case redis.Message:
-			var msg pb.MessageWithReceivers
-			if err := proto.Unmarshal(n.Data, &msg); err != nil {
-				log.Fatal(err)
-			}
-			for _, userId := range msg.ReceiverIds {
-				s.users[userId].msgChan <- msg.Message
-			}
-		}
-	}
 }

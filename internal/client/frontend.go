@@ -57,7 +57,6 @@ func (c *chatClient) buildFrontEnd() {
 		AddItem(loginForm, 1, 1, 1, 1, 0, 0, true)
 
 	c.pages.AddPage("page-login", loginPageGrid, true, true)
-	c.pages.AddPage("page-hover-modal", hoverModal, true, false)
 
 	// Following components are used in main page.
 
@@ -105,8 +104,8 @@ func (c *chatClient) buildFrontEnd() {
 		AddItem(nil, 0, 2, false).
 		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
 			AddItem(nil, 0, 1, false).
-			AddItem(addConversationForm, 10, 1, false).
-			AddItem(nil, 0, 1, false), 0, 1, false).
+			AddItem(addConversationForm, 10, 1, true).
+			AddItem(nil, 0, 1, false), 0, 1, true).
 		AddItem(nil, 0, 2, false)
 
 	grid := tview.NewGrid().
@@ -120,6 +119,7 @@ func (c *chatClient) buildFrontEnd() {
 
 	c.pages.AddPage("page-main", grid, true, false)
 	c.pages.AddPage("page-add-conversation-form", hoverAddConversationForm, true, false)
+	c.pages.AddPage("page-hover-modal", hoverModal, true, false)
 
 	c.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -173,11 +173,8 @@ func (c *chatClient) loginHandler(form *tview.Form) {
 		conversations:    make([]*conversation, 0, len(rsp.Conversations)),
 		conversationsMap: make(map[int32]*conversation, len(rsp.Conversations)),
 	}
-	for _, convo := range rsp.Conversations {
-		internalConvo := &conversation{Conversation: convo}
-		c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
-		c.currentUser.conversationsMap[convo.Id] = internalConvo
-		c.conversationList.AddItem(convo.Name, "", 0, c.conversationSelectedHandler)
+	for _, con := range rsp.Conversations {
+		c.addConversation(con)
 	}
 	go c.startStreamingMessages()
 	c.pages.SwitchToPage("page-main")
@@ -247,8 +244,7 @@ func (c *chatClient) addConversationHandler(form *tview.Form) {
 	_, t := form.GetFormItem(1).(*tview.DropDown).GetCurrentOption()
 	name := form.GetFormItem(0).(*tview.InputField).GetText()
 
-	con := &pb.Conversation{Type: t}
-	req := &pb.AddConversationRequest{Conversation: con}
+	req := &pb.AddConversationRequest{Conversation: &pb.Conversation{Type: t}}
 	switch t {
 	case "PRIVATE":
 		req.MemberNames = []string{c.currentUser.name, name}
@@ -257,17 +253,16 @@ func (c *chatClient) addConversationHandler(form *tview.Form) {
 		req.Conversation.Name = name
 	}
 
-	rsp, err := c.client.AddConversation(context.Background(), req)
-	if err != nil {
-		log.Fatal(err)
+	if rsp, err := c.client.AddConversation(context.Background(), req); err != nil {
+		if st := status.Convert(err); st.Code() == codes.NotFound {
+			c.showHoverModal(st.Message())
+		} else {
+			log.Fatal(err)
+		}
+	} else {
+		c.addConversation(rsp.Conversation)
+		c.pages.HidePage("page-add-conversation-form")
 	}
-	con.Id = rsp.ConversationId
-	internalConvo := &conversation{Conversation: con, messages: make([]*pb.Message, 0)}
-	c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
-	c.currentUser.conversationsMap[con.Id] = internalConvo
-	c.conversationList.AddItem(name, "", 0, c.conversationSelectedHandler)
-
-	c.pages.HidePage("page-add-conversation-form")
 }
 
 func (c *chatClient) startStreamingMessages() {
@@ -285,10 +280,8 @@ func (c *chatClient) startStreamingMessages() {
 				if err != nil {
 					log.Fatal(err)
 				}
-				internalConvo := &conversation{Conversation: rsp.Conversation}
-				c.currentUser.conversations = append(c.currentUser.conversations, internalConvo)
-				c.currentUser.conversationsMap[msg.ConversationId] = internalConvo
-				c.conversationList.AddItem(c.getConversationName(rsp.Conversation), "", 0, c.conversationSelectedHandler)
+				c.addConversation(rsp.Conversation)
+				c.app.Draw()
 			}
 			c.currentUser.conversationsMap[msg.ConversationId].messages = append(c.currentUser.conversationsMap[msg.ConversationId].messages, msg)
 			if c.currentUser.conversations[c.conversationList.GetCurrentItem()].Id == msg.ConversationId {
@@ -347,4 +340,11 @@ func (c *chatClient) getUsername(id int32) string {
 		c.userIdToName[id] = rsp.IdToUsername[id]
 	}
 	return c.userIdToName[id]
+}
+
+func (c *chatClient) addConversation(pbCon *pb.Conversation) {
+	con := &conversation{Conversation: pbCon}
+	c.currentUser.conversations = append(c.currentUser.conversations, con)
+	c.currentUser.conversationsMap[con.Id] = con
+	c.conversationList.AddItem(c.getConversationName(pbCon), "", 0, c.conversationSelectedHandler)
 }
