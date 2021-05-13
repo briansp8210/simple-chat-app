@@ -4,7 +4,7 @@ CREATE TABLE users (
     password bytea NOT NULL
 );
 
-CREATE TYPE conversation_t AS ENUM ('PRIVATE');
+CREATE TYPE conversation_t AS ENUM ('PRIVATE', 'GROUP');
 CREATE TYPE message_data_t AS ENUM ('TEXT');
 
 CREATE TABLE conversations (

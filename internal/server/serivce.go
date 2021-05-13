@@ -103,7 +103,7 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 		}
 	}
 
-	if err := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, "PRIVATE", pq.Array(in.Conversation.MemberIds)).Scan(&in.Conversation.Id); err != nil {
+	if err := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, in.Conversation.Type, pq.Array(in.Conversation.MemberIds)).Scan(&in.Conversation.Id); err != nil {
 		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
 			return nil, status.Errorf(codes.AlreadyExists, "Conversation already exists")
 		} else {
