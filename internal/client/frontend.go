@@ -88,7 +88,8 @@ func (c *chatClient) buildFrontEnd() {
 			c.pages.SwitchToPage("page-login")
 		})
 	fmt.Fprintf(info, `F1 ["1"][darkcyan]Logout[white][""] `)
-	fmt.Fprintf(info, `F2 ["2"][darkcyan]Add-conversation[white][""]`)
+	fmt.Fprintf(info, `F2 ["2"][darkcyan]Add-conversation[white][""] `)
+	fmt.Fprintf(info, `F3 ["3"][darkcyan]Join-group[white][""]`)
 
 	var addConversationForm *tview.Form
 	addConversationForm = tview.NewForm().
@@ -108,6 +109,23 @@ func (c *chatClient) buildFrontEnd() {
 			AddItem(nil, 0, 1, false), 0, 1, true).
 		AddItem(nil, 0, 2, false)
 
+	var joinGroupForm *tview.Form
+	joinGroupForm = tview.NewForm().
+		SetButtonsAlign(tview.AlignCenter).
+		SetButtonBackgroundColor(tcell.ColorGray).
+		AddInputField("[white]Group Name", "", 0, nil, nil).
+		AddButton("OK", func() {
+			c.joinGroupHandler(joinGroupForm)
+		})
+	joinGroupForm.SetBorder(true).SetTitle(" Add Conversation ").SetTitleAlign(tview.AlignCenter)
+	hoverJoinGroupForm := tview.NewFlex().
+		AddItem(nil, 0, 2, false).
+		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+			AddItem(nil, 0, 1, false).
+			AddItem(joinGroupForm, 10, 1, true).
+			AddItem(nil, 0, 1, false), 0, 1, true).
+		AddItem(nil, 0, 2, false)
+
 	grid := tview.NewGrid().
 		SetRows(0, 1, 1).
 		SetColumns(30, 0).
@@ -119,6 +137,7 @@ func (c *chatClient) buildFrontEnd() {
 
 	c.pages.AddPage("page-main", grid, true, false)
 	c.pages.AddPage("page-add-conversation-form", hoverAddConversationForm, true, false)
+	c.pages.AddPage("page-join-group-form", hoverJoinGroupForm, true, false)
 	c.pages.AddPage("page-hover-modal", hoverModal, true, false)
 
 	c.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
@@ -128,6 +147,9 @@ func (c *chatClient) buildFrontEnd() {
 			return nil
 		case tcell.KeyF2:
 			c.pages.ShowPage("page-add-conversation-form")
+			return nil
+		case tcell.KeyF3:
+			c.pages.ShowPage("page-join-group-form")
 			return nil
 		}
 		return event
@@ -271,6 +293,17 @@ func (c *chatClient) addConversationHandler(form *tview.Form) {
 	} else {
 		c.addConversation(rsp.Conversation)
 		c.pages.HidePage("page-add-conversation-form")
+	}
+}
+
+func (c *chatClient) joinGroupHandler(form *tview.Form) {
+	name := form.GetFormItem(0).(*tview.InputField).GetText()
+	req := &pb.JoinGroupRequest{UserId: c.currentUser.id, GroupName: name}
+	if rsp, err := c.client.JoinGroup(context.Background(), req); err != nil {
+		log.Fatal(err)
+	} else {
+		c.addConversation(rsp.Group)
+		c.pages.HidePage("page-join-group-form")
 	}
 }
 

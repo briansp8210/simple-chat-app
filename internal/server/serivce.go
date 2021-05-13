@@ -132,6 +132,24 @@ func (s *chatServer) GetConversation(ctx context.Context, in *pb.GetConversation
 	return &pb.GetConversationResponse{Conversation: conversation}, nil
 }
 
+func (s *chatServer) JoinGroup(ctx context.Context, in *pb.JoinGroupRequest) (*pb.JoinGroupResponse, error) {
+	log.Printf("JoinGroup\n")
+
+	group := &pb.Conversation{}
+	row := s.db.QueryRow("UPDATE conversations SET member_ids = array_append(member_ids, $1) WHERE name = $2 RETURNING id, name, type, member_ids", in.UserId, in.GroupName)
+	if err := row.Scan(&group.Id, &group.Name, &group.Type, pq.Array(&group.MemberIds)); err != nil {
+		log.Fatal(err)
+	}
+
+	redisConn := s.redisPool.Get()
+	defer redisConn.Close()
+	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", group.Id)).AddFlat(in.UserId)...); err != nil {
+		log.Fatal(err)
+	}
+
+	return &pb.JoinGroupResponse{Group: group}, nil
+}
+
 func (s *chatServer) GetMessages(ctx context.Context, in *pb.GetMessagesRequest) (*pb.GetMessagesResponse, error) {
 	log.Printf("GetMessages\n")
 

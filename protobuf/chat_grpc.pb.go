@@ -24,6 +24,7 @@ type ChatClient interface {
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	AddConversation(ctx context.Context, in *AddConversationRequest, opts ...grpc.CallOption) (*AddConversationResponse, error)
 	GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error)
+	JoinGroup(ctx context.Context, in *JoinGroupRequest, opts ...grpc.CallOption) (*JoinGroupResponse, error)
 	GetMessages(ctx context.Context, in *GetMessagesRequest, opts ...grpc.CallOption) (*GetMessagesResponse, error)
 	GetUsernames(ctx context.Context, in *GetUsernamesRequest, opts ...grpc.CallOption) (*GetUsernamesResponse, error)
 	StreamMessages(ctx context.Context, in *StreamMessagesRequest, opts ...grpc.CallOption) (Chat_StreamMessagesClient, error)
@@ -77,6 +78,15 @@ func (c *chatClient) AddConversation(ctx context.Context, in *AddConversationReq
 func (c *chatClient) GetConversation(ctx context.Context, in *GetConversationRequest, opts ...grpc.CallOption) (*GetConversationResponse, error) {
 	out := new(GetConversationResponse)
 	err := c.cc.Invoke(ctx, "/protobuf.Chat/GetConversation", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *chatClient) JoinGroup(ctx context.Context, in *JoinGroupRequest, opts ...grpc.CallOption) (*JoinGroupResponse, error) {
+	out := new(JoinGroupResponse)
+	err := c.cc.Invoke(ctx, "/protobuf.Chat/JoinGroup", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +161,7 @@ type ChatServer interface {
 	Logout(context.Context, *LogoutRequest) (*emptypb.Empty, error)
 	AddConversation(context.Context, *AddConversationRequest) (*AddConversationResponse, error)
 	GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error)
+	JoinGroup(context.Context, *JoinGroupRequest) (*JoinGroupResponse, error)
 	GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error)
 	GetUsernames(context.Context, *GetUsernamesRequest) (*GetUsernamesResponse, error)
 	StreamMessages(*StreamMessagesRequest, Chat_StreamMessagesServer) error
@@ -176,6 +187,9 @@ func (UnimplementedChatServer) AddConversation(context.Context, *AddConversation
 }
 func (UnimplementedChatServer) GetConversation(context.Context, *GetConversationRequest) (*GetConversationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetConversation not implemented")
+}
+func (UnimplementedChatServer) JoinGroup(context.Context, *JoinGroupRequest) (*JoinGroupResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method JoinGroup not implemented")
 }
 func (UnimplementedChatServer) GetMessages(context.Context, *GetMessagesRequest) (*GetMessagesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetMessages not implemented")
@@ -292,6 +306,24 @@ func _Chat_GetConversation_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Chat_JoinGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JoinGroupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ChatServer).JoinGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/protobuf.Chat/JoinGroup",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ChatServer).JoinGroup(ctx, req.(*JoinGroupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Chat_GetMessages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetMessagesRequest)
 	if err := dec(in); err != nil {
@@ -393,6 +425,10 @@ var Chat_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetConversation",
 			Handler:    _Chat_GetConversation_Handler,
+		},
+		{
+			MethodName: "JoinGroup",
+			Handler:    _Chat_JoinGroup_Handler,
 		},
 		{
 			MethodName: "GetMessages",
