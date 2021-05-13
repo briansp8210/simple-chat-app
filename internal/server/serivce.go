@@ -24,10 +24,13 @@ func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*emp
 
 	if _, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password); err != nil {
 		// Ref.: https://www.postgresql.org/docs/9.2/errcodes-appendix.html
-		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
+		switch pqErr := err.(*pq.Error); pqErr.Code {
+		case "23505":
 			return nil, status.Errorf(codes.AlreadyExists, "Username %s is already used", in.Username)
-		} else {
-			return nil, err
+		case "23514":
+			return nil, status.Errorf(codes.InvalidArgument, "Username should be alphanumeric")
+		default:
+			log.Fatal(err)
 		}
 	}
 	return &empty.Empty{}, nil
@@ -100,9 +103,12 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 		}
 	}
 
-	row := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, "PRIVATE", pq.Array(in.Conversation.MemberIds))
-	if err := row.Scan(&in.Conversation.Id); err != nil {
-		log.Fatal(err)
+	if err := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, "PRIVATE", pq.Array(in.Conversation.MemberIds)).Scan(&in.Conversation.Id); err != nil {
+		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
+			return nil, status.Errorf(codes.AlreadyExists, "Conversation already exists")
+		} else {
+			log.Fatal(err)
+		}
 	}
 
 	redisConn := s.redisPool.Get()

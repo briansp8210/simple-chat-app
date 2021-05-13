@@ -144,14 +144,15 @@ func (c *chatClient) registerHandler(form *tview.Form) {
 	}
 
 	if _, err := c.client.Register(context.Background(), req); err != nil {
-		if st := status.Convert(err); st.Code() == codes.AlreadyExists {
+		switch st := status.Convert(err); st.Code() {
+		case codes.AlreadyExists, codes.InvalidArgument:
 			c.showHoverModal(st.Message())
-			return
-		} else {
+		default:
 			log.Fatal(err)
 		}
+	} else {
+		c.showHoverModal("Success")
 	}
-	c.showHoverModal("Success")
 }
 
 func (c *chatClient) loginHandler(form *tview.Form) {
@@ -248,15 +249,23 @@ func (c *chatClient) addConversationHandler(form *tview.Form) {
 	switch t {
 	case "PRIVATE":
 		req.MemberNames = []string{c.currentUser.name, name}
+		// Naming of private conversation: "${SMALLER_USERNAME}-${BIGGER_USERNAME}".
+		// This is used to ensure the uniqueness of private conversation between two users.
+		if c.currentUser.name < name {
+			req.Conversation.Name = c.currentUser.name + "-" + name
+		} else {
+			req.Conversation.Name = name + "-" + c.currentUser.name
+		}
 	case "GROUP":
 		req.MemberNames = []string{c.currentUser.name}
 		req.Conversation.Name = name
 	}
 
 	if rsp, err := c.client.AddConversation(context.Background(), req); err != nil {
-		if st := status.Convert(err); st.Code() == codes.NotFound {
+		switch st := status.Convert(err); st.Code() {
+		case codes.NotFound, codes.AlreadyExists:
 			c.showHoverModal(st.Message())
-		} else {
+		default:
 			log.Fatal(err)
 		}
 	} else {
