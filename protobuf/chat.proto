@@ -40,8 +40,8 @@ message LoginResponse {
 message LogoutRequest { int32 user_id = 1; }
 
 message AddConversationRequest {
-  repeated string member_names = 1;
-  Conversation conversation = 2;
+  Conversation conversation = 1;
+  repeated string member_names = 2;
 }
 
 message AddConversationResponse { Conversation conversation = 1; }
@@ -80,9 +80,8 @@ message SendMessageResponse {
 message Conversation {
   int32 id = 1;
   string name = 2;
-  // Possible types are: PRIVATE
+  // Possible types are: PRIVATE, GROUP
   string type = 3;
-  repeated int32 member_ids = 4;
 }
 
 message Message {

@@ -300,7 +300,12 @@ func (c *chatClient) joinGroupHandler(form *tview.Form) {
 	name := form.GetFormItem(0).(*tview.InputField).GetText()
 	req := &pb.JoinGroupRequest{UserId: c.currentUser.id, GroupName: name}
 	if rsp, err := c.client.JoinGroup(context.Background(), req); err != nil {
-		log.Fatal(err)
+		switch st := status.Convert(err); st.Code() {
+		case codes.NotFound, codes.AlreadyExists:
+			c.showHoverModal(st.Message())
+		default:
+			log.Fatal(err)
+		}
 	} else {
 		c.addConversation(rsp.Group)
 		c.pages.HidePage("page-join-group-form")
@@ -362,10 +367,11 @@ func (c *chatClient) showHoverModal(msg string) {
 func (c *chatClient) getConversationName(conversation *pb.Conversation) (name string) {
 	switch conversation.Type {
 	case "PRIVATE":
-		if conversation.MemberIds[0] == c.currentUser.id {
-			name = c.getUsername(conversation.MemberIds[1])
+		members := strings.Split(conversation.Name, "-")
+		if members[0] == c.currentUser.name {
+			name = members[1]
 		} else {
-			name = c.getUsername(conversation.MemberIds[0])
+			name = members[0]
 		}
 	case "GROUP":
 		name = conversation.Name

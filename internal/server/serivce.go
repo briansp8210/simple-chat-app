@@ -58,7 +58,10 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		log.Fatal(err)
 	}
 
-	rows, err := s.db.Query("SELECT * FROM conversations WHERE $1 = ANY (member_ids)", uid)
+	query := `SELECT conversations.id, conversations.name, conversations.type FROM participants
+		INNER JOIN conversations ON participants.conversation_id = conversations.id
+		WHERE participants.user_id = $1`
+	rows, err := s.db.Query(query, uid)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -67,7 +70,7 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 	conversations := make([]*pb.Conversation, 0)
 	for rows.Next() {
 		c := &pb.Conversation{}
-		if err := rows.Scan(&c.Id, &c.Name, &c.Type, pq.Array(&c.MemberIds)); err != nil {
+		if err := rows.Scan(&c.Id, &c.Name, &c.Type); err != nil {
 			log.Fatal(err)
 		}
 		conversations = append(conversations, c)
@@ -95,15 +98,16 @@ func (s *chatServer) Logout(ctx context.Context, in *pb.LogoutRequest) (*empty.E
 func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversationRequest) (*pb.AddConversationResponse, error) {
 	log.Printf("AddConversation\n")
 
-	for _, member := range in.MemberNames {
-		if uid, err := s.getUserId(member); err != nil {
+	memberIds := make([]int32, 0, len(in.MemberNames))
+	for _, memberName := range in.MemberNames {
+		uid, err := s.getUserId(memberName)
+		if err != nil {
 			return nil, err
-		} else {
-			in.Conversation.MemberIds = append(in.Conversation.MemberIds, uid)
 		}
+		memberIds = append(memberIds, uid)
 	}
 
-	if err := s.db.QueryRow("INSERT INTO conversations (name, type, member_ids) VALUES ($1, $2, $3) RETURNING id", in.Conversation.Name, in.Conversation.Type, pq.Array(in.Conversation.MemberIds)).Scan(&in.Conversation.Id); err != nil {
+	if err := s.db.QueryRow("INSERT INTO conversations (name, type) VALUES ($1, $2) RETURNING id", in.Conversation.Name, in.Conversation.Type).Scan(&in.Conversation.Id); err != nil {
 		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
 			return nil, status.Errorf(codes.AlreadyExists, "Conversation already exists")
 		} else {
@@ -111,9 +115,15 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 		}
 	}
 
+	for _, memberId := range memberIds {
+		if _, err := s.db.Exec("INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2)", memberId, in.Conversation.Id); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
-	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", in.Conversation.Id)).AddFlat(in.Conversation.MemberIds)...); err != nil {
+	if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", in.Conversation.Id)).AddFlat(memberIds)...); err != nil {
 		log.Fatal(err)
 	}
 
@@ -125,7 +135,7 @@ func (s *chatServer) GetConversation(ctx context.Context, in *pb.GetConversation
 
 	conversation := &pb.Conversation{}
 	row := s.db.QueryRow("SELECT * FROM conversations WHERE id = $1", in.ConversationId)
-	if err := row.Scan(&conversation.Id, &conversation.Name, &conversation.Type, pq.Array(&conversation.MemberIds)); err != nil {
+	if err := row.Scan(&conversation.Id, &conversation.Name, &conversation.Type); err != nil {
 		log.Fatal(err)
 	}
 
@@ -136,9 +146,20 @@ func (s *chatServer) JoinGroup(ctx context.Context, in *pb.JoinGroupRequest) (*p
 	log.Printf("JoinGroup\n")
 
 	group := &pb.Conversation{}
-	row := s.db.QueryRow("UPDATE conversations SET member_ids = array_append(member_ids, $1) WHERE name = $2 RETURNING id, name, type, member_ids", in.UserId, in.GroupName)
-	if err := row.Scan(&group.Id, &group.Name, &group.Type, pq.Array(&group.MemberIds)); err != nil {
+	if err := s.db.QueryRow("SELECT * FROM conversations WHERE name = $1", in.GroupName).Scan(&group.Id, &group.Name, &group.Type); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, status.Errorf(codes.NotFound, "Gorup %s not found", in.GroupName)
+		}
 		log.Fatal(err)
+	}
+
+	if _, err := s.db.Exec("INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2)", in.UserId, group.Id); err != nil {
+		switch pqErr := err.(*pq.Error); pqErr.Code {
+		case "23505":
+			return nil, status.Errorf(codes.AlreadyExists, "You have already joined %s", in.GroupName)
+		default:
+			log.Fatal(err)
+		}
 	}
 
 	redisConn := s.redisPool.Get()
@@ -336,7 +357,23 @@ func (s *chatServer) getConversationMemberIds(conversationId int32) (int32Member
 	}
 
 	if len(memberIds) == 0 {
-		if err := s.db.QueryRow("SELECT member_ids FROM conversations WHERE id = $1", conversationId).Scan(pq.Array(&int32MemberIds)); err != nil {
+		query := `SELECT participants.user_id FROM conversations
+			INNER JOIN participants ON conversations.id = participants.conversation_id
+			WHERE conversations.id = $1`
+		rows, err := s.db.Query(query, conversationId)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var memberId int32
+			if err := rows.Scan(&memberId); err != nil {
+				log.Fatal(err)
+			}
+			int32MemberIds = append(int32MemberIds, memberId)
+		}
+		if err := rows.Err(); err != nil {
 			log.Fatal(err)
 		}
 		if _, err := redisConn.Do("SADD", redis.Args{}.Add(fmt.Sprintf("conversationMembers:%d", conversationId)).AddFlat(int32MemberIds)...); err != nil {
