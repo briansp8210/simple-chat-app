@@ -23,11 +23,10 @@ func (s *chatServer) Register(ctx context.Context, in *pb.RegisterRequest) (*emp
 	log.Printf("Receive Registration from user %s\n", in.Username)
 
 	if _, err := s.db.Exec("INSERT INTO users (username, password) VALUES ($1, $2)", in.Username, in.Password); err != nil {
-		// Ref.: https://www.postgresql.org/docs/9.2/errcodes-appendix.html
-		switch pqErr := err.(*pq.Error); pqErr.Code {
-		case "23505":
+		switch pqErr := err.(*pq.Error); pqErr.Code.Name() {
+		case "unique_violation":
 			return nil, status.Errorf(codes.AlreadyExists, "Username %s is already used", in.Username)
-		case "23514":
+		case "check_violation":
 			return nil, status.Errorf(codes.InvalidArgument, "Username should be alphanumeric")
 		default:
 			log.Fatal(err)
@@ -108,9 +107,10 @@ func (s *chatServer) AddConversation(ctx context.Context, in *pb.AddConversation
 	}
 
 	if err := s.db.QueryRow("INSERT INTO conversations (name, type) VALUES ($1, $2) RETURNING id", in.Conversation.Name, in.Conversation.Type).Scan(&in.Conversation.Id); err != nil {
-		if pqErr := err.(*pq.Error); pqErr.Code == "23505" {
+		switch pqErr := err.(*pq.Error); pqErr.Code.Name() {
+		case "unique_violation":
 			return nil, status.Errorf(codes.AlreadyExists, "Conversation already exists")
-		} else {
+		default:
 			log.Fatal(err)
 		}
 	}
@@ -154,8 +154,8 @@ func (s *chatServer) JoinGroup(ctx context.Context, in *pb.JoinGroupRequest) (*p
 	}
 
 	if _, err := s.db.Exec("INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2)", in.UserId, group.Id); err != nil {
-		switch pqErr := err.(*pq.Error); pqErr.Code {
-		case "23505":
+		switch pqErr := err.(*pq.Error); pqErr.Code.Name() {
+		case "unique_violation":
 			return nil, status.Errorf(codes.AlreadyExists, "You have already joined %s", in.GroupName)
 		default:
 			log.Fatal(err)
