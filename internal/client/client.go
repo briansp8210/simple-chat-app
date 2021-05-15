@@ -33,6 +33,7 @@ type userContext struct {
 type conversation struct {
 	*pb.Conversation
 	messages []*pb.Message
+	listIdx  int
 }
 
 func NewChatClient(host string, port int) *chatClient {

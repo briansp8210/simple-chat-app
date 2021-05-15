@@ -60,7 +60,9 @@ func (c *chatClient) buildFrontEnd() {
 
 	// Following components are used in main page.
 
-	c.conversationList = tview.NewList()
+	c.conversationList = tview.NewList().
+		SetHighlightFullLine(true).
+		SetSecondaryTextColor(tcell.ColorLightSlateGray)
 
 	c.chatTextView = tview.NewTextView().
 		SetDynamicColors(true).
@@ -260,7 +262,9 @@ func (c *chatClient) sendMessageHandler() {
 	msg.Id = rsp.MessageId
 	msg.Ts = rsp.Ts
 	conversation.messages = append(conversation.messages, msg)
+	conversation.Conversation.LastMessage = msg
 	c.showMessage(msg)
+	c.highlightConversation(conversation)
 }
 
 func (c *chatClient) addConversationHandler(form *tview.Form) {
@@ -328,12 +332,14 @@ func (c *chatClient) startStreamingMessages() {
 					log.Fatal(err)
 				}
 				c.addConversation(rsp.Conversation)
-				c.app.Draw()
 			}
 			c.currentUser.conversationsMap[msg.ConversationId].messages = append(c.currentUser.conversationsMap[msg.ConversationId].messages, msg)
 			if c.currentUser.conversations[c.conversationList.GetCurrentItem()].Id == msg.ConversationId {
 				c.showMessage(msg)
 			}
+			c.currentUser.conversationsMap[msg.ConversationId].Conversation.LastMessage = msg
+			c.highlightConversation(c.currentUser.conversationsMap[msg.ConversationId])
+			c.app.Draw() // Refresh conversationList
 		case io.EOF:
 			break
 		default:
@@ -391,8 +397,31 @@ func (c *chatClient) getUsername(id int32) string {
 }
 
 func (c *chatClient) addConversation(pbCon *pb.Conversation) {
-	con := &conversation{Conversation: pbCon}
+	con := &conversation{Conversation: pbCon, listIdx: c.conversationList.GetItemCount()}
 	c.currentUser.conversations = append(c.currentUser.conversations, con)
 	c.currentUser.conversationsMap[con.Id] = con
-	c.conversationList.AddItem(c.getConversationName(pbCon), "", 0, c.conversationSelectedHandler)
+	if pbCon.LastMessage != nil {
+		c.conversationList.AddItem(c.getConversationName(pbCon), pbCon.LastMessage.Contents, 0, c.conversationSelectedHandler)
+	} else {
+		c.conversationList.AddItem(c.getConversationName(pbCon), "", 0, c.conversationSelectedHandler)
+	}
+}
+
+func (c *chatClient) highlightConversation(con *conversation) {
+	currentFocusedItem := c.conversationList.GetCurrentItem()
+	c.conversationList.RemoveItem(con.listIdx)
+	c.conversationList.InsertItem(0, c.getConversationName(con.Conversation), con.Conversation.LastMessage.Contents, 0, c.conversationSelectedHandler)
+	c.currentUser.conversations = append([]*conversation{con}, append(c.currentUser.conversations[:con.listIdx], c.currentUser.conversations[con.listIdx+1:]...)...)
+
+	switch {
+	case con.listIdx == currentFocusedItem:
+		c.conversationList.SetCurrentItem(0)
+	case con.listIdx > currentFocusedItem:
+		c.conversationList.SetCurrentItem(currentFocusedItem + 1)
+	case con.listIdx < currentFocusedItem:
+	}
+
+	for i, conv := range c.currentUser.conversations {
+		conv.listIdx = i
+	}
 }

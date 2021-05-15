@@ -82,6 +82,7 @@ message Conversation {
   string name = 2;
   // Possible types are: PRIVATE, GROUP
   string type = 3;
+  Message last_message = 4;
 }
 
 message Message {

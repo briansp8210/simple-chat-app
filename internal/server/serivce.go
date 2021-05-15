@@ -57,9 +57,11 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 		log.Fatal(err)
 	}
 
-	query := `SELECT conversations.id, conversations.name, conversations.type FROM participants
-		INNER JOIN conversations ON participants.conversation_id = conversations.id
-		WHERE participants.user_id = $1`
+	query := `SELECT conversations.id, conversations.name, conversations.type, conversations.last_message_id FROM conversations
+		INNER JOIN participants ON conversations.id = participants.conversation_id
+		LEFT OUTER JOIN messages ON conversations.last_message_id = messages.id
+		WHERE participants.user_id = $1
+		ORDER BY messages.ts DESC NULLS LAST`
 	rows, err := s.db.Query(query, uid)
 	if err != nil {
 		log.Fatal(err)
@@ -68,9 +70,21 @@ func (s *chatServer) Login(ctx context.Context, in *pb.LoginRequest) (*pb.LoginR
 
 	conversations := make([]*pb.Conversation, 0)
 	for rows.Next() {
+		var lastMsgId sql.NullInt32
 		c := &pb.Conversation{}
-		if err := rows.Scan(&c.Id, &c.Name, &c.Type); err != nil {
+		if err := rows.Scan(&c.Id, &c.Name, &c.Type, &lastMsgId); err != nil {
 			log.Fatal(err)
+		}
+		if lastMsgId.Valid {
+			msg := &pb.Message{}
+			var ts time.Time
+			if err := s.db.QueryRow("SELECT * FROM messages WHERE id = $1", lastMsgId).Scan(&msg.Id, &msg.SenderId, &msg.ConversationId, &ts, &msg.MessageDataType, &msg.Contents); err != nil {
+				log.Fatal(err)
+			}
+			if msg.Ts, err = ptypes.TimestampProto(ts); err != nil {
+				log.Fatal(err)
+			}
+			c.LastMessage = msg
 		}
 		conversations = append(conversations, c)
 	}
@@ -146,11 +160,27 @@ func (s *chatServer) JoinGroup(ctx context.Context, in *pb.JoinGroupRequest) (*p
 	log.Printf("JoinGroup\n")
 
 	group := &pb.Conversation{}
-	if err := s.db.QueryRow("SELECT * FROM conversations WHERE name = $1", in.GroupName).Scan(&group.Id, &group.Name, &group.Type); err != nil {
+	var lastMsgId sql.NullInt32
+	if err := s.db.QueryRow("SELECT * FROM conversations WHERE name = $1", in.GroupName).Scan(&group.Id, &group.Name, &group.Type, &lastMsgId); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, status.Errorf(codes.NotFound, "Gorup %s not found", in.GroupName)
 		}
 		log.Fatal(err)
+	}
+	if lastMsgId.Valid {
+		msg := &pb.Message{}
+		var ts time.Time
+		if err := s.db.QueryRow("SELECT * FROM messages WHERE id = $1", lastMsgId).Scan(&msg.Id, &msg.SenderId, &msg.ConversationId, &ts, &msg.MessageDataType, &msg.Contents); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, status.Errorf(codes.NotFound, "Gorup %s not found", in.GroupName)
+			}
+			log.Fatal(err)
+		}
+		if t, err := ptypes.TimestampProto(ts); err != nil {
+			log.Fatal(err)
+		} else {
+			msg.Ts = t
+		}
 	}
 
 	if _, err := s.db.Exec("INSERT INTO participants (user_id, conversation_id) VALUES ($1, $2)", in.UserId, group.Id); err != nil {
@@ -251,6 +281,10 @@ func (s *chatServer) SendMessage(ctx context.Context, in *pb.SendMessageRequest)
 	}
 	in.Message.Id = id
 	in.Message.Ts = ts
+
+	if _, err := s.db.Exec("UPDATE conversations SET last_message_id = $1 WHERE id = $2", id, in.Message.ConversationId); err != nil {
+		log.Fatal(err)
+	}
 
 	redisConn := s.redisPool.Get()
 	defer redisConn.Close()
