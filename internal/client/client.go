@@ -11,16 +11,19 @@ import (
 
 type chatClient struct {
 	client pb.ChatClient
+	frontendWidgets
 
+	currentUser  *userContext
+	userIdToName map[int32]string
+}
+
+type frontendWidgets struct {
 	app              *tview.Application
 	pages            *tview.Pages
 	modal            *tview.Modal
 	conversationList *tview.List
 	chatTextView     *tview.TextView
 	msgInputField    *tview.InputField
-
-	currentUser  *userContext
-	userIdToName map[int32]string
 }
 
 type userContext struct {

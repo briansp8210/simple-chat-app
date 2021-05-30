@@ -328,9 +328,11 @@ func (s *chatServer) pubHandler() {
 			if err := proto.Unmarshal(n.Data, &msg); err != nil {
 				log.Fatal(err)
 			}
+			s.mu.RLock()
 			for _, userId := range msg.ReceiverIds {
 				s.users[userId].msgChan <- msg.Message
 			}
+			s.mu.RUnlock()
 		}
 	}
 }

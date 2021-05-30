@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	pb "github.com/briansp8210/simple-chat-app/protobuf"
@@ -15,6 +16,7 @@ import (
 type chatServer struct {
 	pb.UnimplementedChatServer
 
+	mu         sync.RWMutex
 	serverId   string
 	grpcServer *grpc.Server
 	db         *sql.DB
@@ -71,6 +73,8 @@ func (s *chatServer) Serve(lis *net.Listener) {
 }
 
 func (s *chatServer) CreateUserContext(id int32, msgChan chan *pb.Message, termChan chan interface{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.users[id] = &userContext{
 		msgChan:  msgChan,
 		termChan: termChan,
@@ -78,5 +82,7 @@ func (s *chatServer) CreateUserContext(id int32, msgChan chan *pb.Message, termC
 }
 
 func (s *chatServer) DeleteUserContext(id int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.users, id)
 }
